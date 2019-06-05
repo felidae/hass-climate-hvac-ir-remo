@@ -17,7 +17,7 @@ It works as climate component, and synthes HVAC IR signal.
 
 ## How to try
 
-- Place files which this repository contains into your hass's `custom_components` folder.
+- Place files which this repository contains into your hass's `custom_components/hvac_ir` folder.
 - Get HVAC model type from here. -> `https://github.com/shprota/hvac_ir/tree/master/hvac_ir`
   - e.g. daikin2, fujitsu
 - Add config to `configuration.yaml`.
