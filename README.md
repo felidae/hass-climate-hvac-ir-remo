@@ -26,7 +26,7 @@ It works as climate component, and synthes HVAC IR signal.
 climate:
   - platform: hvac_ir
     name: Set your HVAC name.
-    host: <Nature Remo IP/hostname>
+    host: <Nature Remo IP>
     type: <HVAC model type>
 
 ```
