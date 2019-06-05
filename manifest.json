@@ -1,0 +1,11 @@
+{
+  "domain": "hvac_ir",
+  "name": "hvac-ir remo",
+  "requirements": [
+    "hvac_ir==0.7"
+  ],
+  "dependencies": [],
+  "codeowners": [
+    "@felis"
+  ]
+}
