@@ -192,7 +192,7 @@ class NatureRemoClimate(ClimateDevice):
     resp = requests.post(
       "http://{}/messages".format(self._host),
       json.dumps({"format": "us", "freq": 38, "data": payload}),
-      headers = {"X-Requested-With": "curl"}
+      headers = {"X-Requested-With": "curl", "Expect": ""}
     )
     #self._protocol.durations = []
     """
