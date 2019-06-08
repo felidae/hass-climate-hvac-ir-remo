@@ -67,7 +67,6 @@ def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
   name = config.get(CONF_NAME)
   #sensor = config.get(CONF_SENSOR)
 
-  _LOGGER.debug("agajglajlkgal")
   async_add_devices([
     NatureRemoClimate(hass, name, host, timeout, cls)
   ])
@@ -183,7 +182,7 @@ class NatureRemoClimate(ClimateDevice):
     power = 'on'
     if op == 'off' or op == 'idle':
       power = 'off'
-    self._protocol.send(power, op, self._current_fan_mode, int(self._target_temperature), self._current_swing_mode,
+    self._protocol.send(power, op, self._current_fan_mode, int(self._target_temperature), self._protocol.VDIR_AUTO,
       self._protocol.HDIR_AUTO, False)
 
     _LOGGER.warning("Sending power: {}, op: {}, fan: {}, temp: {}, swing: {}"
