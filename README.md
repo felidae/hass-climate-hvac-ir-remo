@@ -1,26 +1,25 @@
 Home Assistant platform for Nature Remo Local API
 ==========
 
-Home Assistant platform for Nature Remo Local API.
+Nature Remo Local APIを利用したHome Assistantのエアコンコンポーネントです。
 
-It works as climate component, and synthes HVAC IR signal.
+エアコン(climate)コンポーネントとして合成したリモコン信号を送信します。
 
-## Notice and Limitations
+## 注意事項
 
-- This is just Proof of Concept, use only TESTING. I told you.
-- This is UNOFFICIAL.
-  - No permittion from
-    - HVAC vendor
-    - python library creator
-    - original sample code creator
-- I test it on hass.io on Docker.
+- 自家用に作ったものです。
+- 各方面に非公式です。
+- Docker環境のhass.ioで動作を確認しました。
+- daikin2の信号を[Remo](https://nature.global/)と
+  [Remo互換の信号を受け付けるIRKitクローン](https://github.com/toskaw/ESP8266IRKit)で試しています。
 
-## How to try
+## 試し方
 
-- Place files which this repository contains into your hass's `custom_components/hvac_ir` folder.
-- Get HVAC model type from here. -> `https://github.com/shprota/hvac_ir/tree/master/hvac_ir`
+- `custom_components/hvac_ir`フォルダにファイルを配置する
+- `https://github.com/shprota/hvac_ir/tree/master/hvac_ir`を参考にエアコンのタイプを選ぶ
   - e.g. daikin2, fujitsu
-- Add config to `configuration.yaml`.
+- `configuration.yaml`に以下の例のように書き加える
+- `device:`をirkitにするとIRKitで動作する信号を送信する
 
 ```
 climate:
@@ -28,6 +27,6 @@ climate:
     name: Set your HVAC name.
     host: <Nature Remo IP>
     type: <HVAC model type>
-
+    device: remo/irkit
 ```
-- Restart hass.
+- hassを再起動する

@@ -1,318 +1,256 @@
-"""
-Demo platform that offers a fake climate device.
-
-For more details about this platform, please refer to the documentation
-https://home-assistant.io/components/demo/
-"""
 import asyncio
-import logging
 import requests
+import functools as ft
 import json
-#import socket
-from importlib import import_module
+import logging
+import hvac_ir
+from typing import Any, Dict, List, Optional
 
-#import binascii
-import voluptuous as vol
-from homeassistant.core import callback
-from homeassistant.helpers.event import async_track_state_change
-#from homeassistant.helpers.restore_state import async_get_last_state
-from homeassistant.helpers.restore_state import RestoreEntity
+DOMAIN = "hvac_ir"
 
-from homeassistant.components.climate import (
-    ClimateDevice, PLATFORM_SCHEMA)
+from homeassistant.components.climate import ClimateDevice, PLATFORM_SCHEMA
+from homeassistant.const import (
+    ATTR_TEMPERATURE,
+    TEMP_CELSIUS,
+    CONF_NAME,
+    CONF_HOST,
+    CONF_TYPE,
+    CONF_DEVICE,
+)
 from homeassistant.components.climate.const import (
-    SUPPORT_TARGET_TEMPERATURE, SUPPORT_FAN_MODE, SUPPORT_OPERATION_MODE, SUPPORT_SWING_MODE,
-    STATE_AUTO, STATE_COOL, STATE_DRY, STATE_FAN_ONLY, STATE_HEAT)
+    HVAC_MODE_COOL,
+    HVAC_MODE_HEAT,
+    HVAC_MODE_AUTO,
+    HVAC_MODE_DRY,
+    HVAC_MODE_FAN_ONLY,
+    HVAC_MODE_OFF,
+    FAN_AUTO,
+    FAN_LOW,
+    FAN_MEDIUM,
+    FAN_HIGH,
+    FAN_MIDDLE,
+    SWING_OFF,
+    SWING_BOTH,
+    SWING_VERTICAL,
+    SWING_HORIZONTAL,
+    SUPPORT_TARGET_TEMPERATURE,
+    SUPPORT_FAN_MODE,
+    SUPPORT_SWING_MODE,
 
-from homeassistant.const import (ATTR_TEMPERATURE, CONF_TIMEOUT, CONF_HOST, CONF_MAC, CONF_TYPE,
-    ATTR_UNIT_OF_MEASUREMENT, CONF_NAME, STATE_OFF)
+)
 
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType, HomeAssistantType, ServiceDataType
+from homeassistant.util.temperature import convert as convert_temperature
+
+import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
-REQUIREMENTS = ['hvac_ir']
+SUPPORT_FLAGS = SUPPORT_TARGET_TEMPERATURE | \
+                SUPPORT_FAN_MODE | \
+                SUPPORT_SWING_MODE
 
-DOMAIN = 'hvac_ir'
+MODES_MAP = {
+    HVAC_MODE_COOL: 'cool',
+    HVAC_MODE_HEAT: 'heat',
+    HVAC_MODE_AUTO: 'auto',
+    HVAC_MODE_DRY: 'dry',
+    HVAC_MODE_FAN_ONLY: 'fan',
+    HVAC_MODE_OFF: 'off',
+}
 
-DEFAULT_TIMEOUT = 10
-DEFAULT_RETRY = 3
+FANS_MAP = {
+    FAN_AUTO: 'auto',
+    FAN_LOW: 'low',
+    FAN_MEDIUM: 'medium',
+    FAN_HIGH: 'highest',
+}
 
-DEFAULT_NAME = 'Nature Remo HVAC'
-#CONF_SENSOR = otarget_sensor'
+SWINGS_MAP = {
+    SWING_OFF: ['auto', 'auto'],
+    SWING_BOTH: ['swing', 'swing'],
+    SWING_VERTICAL: ['swing', 'auto'],
+    SWING_HORIZONTAL: ['auto', 'swing'],
+}
 
-SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE | 
-    SUPPORT_OPERATION_MODE | SUPPORT_FAN_MODE)
-
+DEFAULT_MIN_TEMP = 7
+DEFAULT_MAX_TEMP = 35
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-  vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-  vol.Required(CONF_HOST): cv.string,
-  vol.Required(CONF_TYPE): cv.string,
-  vol.Optional(CONF_TIMEOUT, default=DEFAULT_TIMEOUT): cv.positive_int,
-  })
+    vol.Required(CONF_NAME): cv.string,
+    vol.Required(CONF_HOST): cv.string,
+    vol.Required(CONF_TYPE): cv.string,
+    vol.Optional(CONF_DEVICE, default="remo"): cv.string,
+})
 
-# noinspection PyUnusedLocal
-@asyncio.coroutine
-def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
-  actype = config.get(CONF_TYPE)
-  import hvac_ir
-  cls = hvac_ir.get_sender(actype.lower())
-  if cls is None:
-    _LOGGER.error("Invalid device type: [{}]".format(actype.lower))
-    return
-  host = config.get(CONF_HOST)
-  #mac = binascii.unhexlify(config.get(CONF_MAC).encode().replace(b':', b''))
-  timeout = config.get(CONF_TIMEOUT)
-  name = config.get(CONF_NAME)
-  #sensor = config.get(CONF_SENSOR)
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    add_entities([HvacIrRemoClimate(
+        config[CONF_NAME], config[CONF_HOST], \
+        config[CONF_TYPE], config[CONF_DEVICE])])
+    return True
 
-  async_add_devices([
-    NatureRemoClimate(hass, name, host, timeout, cls)
-  ])
+"""
+async def async_setup_platform(hass, config, add_entities, discovery_info=None):
+    devs = [
+        HvacIrRemoClimate(config[CONF_NAME], config[CONF_HOST], \
+            config[CONF_TYPE], config[CONF_DEVICE])
+    ]
+    add_entities(devs, True)
+    return True
+"""
 
+class HvacIrRemoClimate(ClimateDevice):
+    def send_command(self):
+        self._sender.send(self._sender.POWER_OFF \
+            if self._mode == HVAC_MODE_OFF else self._sender.POWER_ON, \
+            MODES_MAP.get(self._mode), \
+            FANS_MAP.get(self._fan_mode), \
+            self._target_temperature, \
+            SWINGS_MAP.get(self._swing_mode)[0], \
+            SWINGS_MAP.get(self._swing_mode)[1], \
+            False
+        )
+        self._signal =  self._sender.get_durations()
+        jsonstr = json.dumps({
+            "format": self._format, "freq": 38, \
+            "data": list(map(lambda x: x * self._resolution, self._signal))
+        })
+        resp = requests.post(
+            self._endpoint, jsonstr,
+            headers = {
+                "X-Requested-With": "curl",
+                "Expect": ""
+            }
+        )
+        self._sender.durations = []
 
-# noinspection PyAbstractClass
-class NatureRemoClimate(ClimateDevice):
-  TICK = 32.6
-  IR_TOKEN = 0x26
+    def __init__(self, name, host, type, device = "remo"):
+        self._name = name
+        self._host = host
+        self._type = type.lower()
+        self._device = device.lower()
+        self._format = "raw" if self._device == "irkit" else "us"
+        self._resolution = 2 if self._device == "irkit" else 1
+        Sender = hvac_ir.get_sender(self._type)
+        self._sender = Sender()
+        if self._sender is None:
+            _LOGGER.error("Invalid device type: [{}]".format(self._type))
+            return
+        self._endpoint = "http://{}/messages".format(self._host)
+        self._signal = None
+        self._support_flags = SUPPORT_FLAGS
+        self._modes = [
+            HVAC_MODE_COOL,
+            HVAC_MODE_HEAT,
+            HVAC_MODE_AUTO,
+            HVAC_MODE_DRY,
+            HVAC_MODE_FAN_ONLY,
+            HVAC_MODE_OFF,
+        ]
+        self._mode = HVAC_MODE_OFF
+        self._fan_modes = [
+            FAN_AUTO,
+            FAN_LOW,
+            FAN_MEDIUM,
+            FAN_HIGH,
+        ]
+        self._fan_mode = FAN_AUTO
+        self._target_temperature = 23
+        self._swing_modes = [
+            SWING_OFF,
+            SWING_BOTH,
+            SWING_VERTICAL,
+            SWING_HORIZONTAL,
+        ]
+        self._swing_mode = SWING_OFF
 
-  def __init__(self, hass, name, host, timeout, protocol):
-    """Initialize the climate device."""
-    self.hass = hass
-    self._name = name
-    self._host = host
-    #self._mac = mac
-    self._timeout = timeout
-    #self._sensor = sensor
-    self._protocol = protocol()
-    self._unit = hass.config.units.temperature_unit
-    self._target_temperature = 23
-    self._current_temperature = None
-    self._current_swing_mode = 'auto'
-    self._current_fan_mode = 'auto'
-    self._current_operation = 'off'
-    #self._broadlink_device = broadlink_device
+    @property
+    def name(self) -> str:
+        return self._name
 
-    #self._operations_list = self._protocol.list_modes()
-    self._operations_list = list([
-      STATE_FAN_ONLY,
-      STATE_DRY,
-      STATE_COOL,
-      STATE_HEAT,
-      STATE_AUTO,
-    ])
-    self._operations_list.insert(0, 'off')
-    #self._fan_list = self._protocol.list_fan_speeds()
-    self._fan_list = list({
-      'auto',
-      'low',
-      'medium',
-      'high',
-      'higher',
-      'higiest',
-    })
-    self._swing_list = self._protocol.list_swing_modes()
+    @property
+    def supported_features(self) -> int:
+        return self._support_flags
 
-    """
-    if sensor:
-      async_track_state_change(
-        hass, sensor, self._async_temp_sensor_changed)
-      sensor_state = hass.states.get(sensor)
-      if sensor_state:
-        self._async_update_current_temp(sensor_state)
-    """
+    @property
+    def min_temp(self) -> float:
+        return convert_temperature(
+            DEFAULT_MIN_TEMP, TEMP_CELSIUS, self.temperature_unit
+        )
 
-  @asyncio.coroutine
-  def _async_temp_sensor_changed(self, entity_id, old_state, new_state):
-    """Handle temperature changes."""
-    if new_state is None:
-      return
+    @property
+    def max_temp(self) -> float:
+        return convert_temperature(
+            DEFAULT_MAX_TEMP, TEMP_CELSIUS, self.temperature_unit
+        )
 
-    self._async_update_current_temp(new_state)
-    yield from self.async_update_ha_state()
+    @property
+    def hvac_mode(self) -> str:
+        return self._mode
 
-  @callback
-  def _async_update_current_temp(self, state):
-    """Update thermostat with latest state from sensor."""
-    _LOGGER.warning("Update current temp to {}".format(state.state))
-    unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+    @property
+    def hvac_modes(self) -> List[str]:
+        return self._modes
 
-    try:
-      _state = state.state
-      if self.represents_float(_state):
-        self._current_temperature = self.hass.config.units.temperature(
-          float(_state), unit)
-    except ValueError as ex:
-      _LOGGER.error('Unable to update from sensor: %s', ex)
+    @property
+    def target_temperature(self) -> Optional[float]:
+        return self._target_temperature
 
-  @staticmethod
-  def represents_float(s):
-    try:
-      float(s)
-      return True
-    except ValueError:
-      return False
+    @property
+    def target_temperature_step(self) -> float:
+        return 1
 
-  """
-  @classmethod
-  def bl_convert(cls, durations):
-    result = bytearray()
-    result.append(cls.IR_TOKEN)
-    result.append(0)  # repeat
-    result.append(len(durations) % 256)
-    result.append(int(len(durations) / 256))
-    for dur in durations:
-      num = int(round(dur / cls.TICK))
-      if num > 255:
-        result.append(0)
-        result.append(int(num / 256))
-      result.append(num % 256)
-    result.append(0x0d)
-    result.append(0x05)
-    result.append(0x00)
-    result.append(0x00)
-    result.append(0x00)
-    result.append(0x00)
-    return result
-  """
+    @property
+    def temperature_unit(self) -> str:
+        return TEMP_CELSIUS
 
-  def send_command(self):
-    op = self._current_operation.lower()
-    power = 'on'
-    if op == 'off' or op == 'idle':
-      power = 'off'
-    self._protocol.send(power, op, self._current_fan_mode, int(self._target_temperature), self._protocol.VDIR_AUTO,
-      self._protocol.HDIR_AUTO, False)
+    @property
+    def fan_mode(self) -> Optional[str]:
+        return self._fan_mode
 
-    _LOGGER.warning("Sending power: {}, op: {}, fan: {}, temp: {}, swing: {}"
-      .format(power, op, self._current_fan_mode, self._target_temperature, self._current_swing_mode))
-    payload = self._protocol.get_durations()
-    resp = requests.post(
-      "http://{}/messages".format(self._host),
-      json.dumps({"format": "us", "freq": 38, "data": payload}),
-      headers = {
-        "X-Requested-With": "curl",
-        "Expect": ""
-      }
-    )
-    self._protocol.durations = []
-    """
-    for retry in range(DEFAULT_RETRY):
-      try:
-        break
-      except (socket.timeout, ValueError):
-        try:
-          #self._broadlink_device.auth()
-          pass
-        except socket.timeout:
-          if retry == DEFAULT_RETRY - 1:
-            _LOGGER.error("Failed to send packet to Broadlink RM Device")
-    """
+    @property
+    def fan_modes(self) -> Optional[List[str]]:
+        return self._fan_modes
 
-  @property
-  def supported_features(self):
-    """Return the list of supported features."""
-    return SUPPORT_FLAGS
+    @property
+    def swing_mode(self) -> Optional[str]:
+        return self._swing_mode
 
-  @property
-  def should_poll(self):
-    """Return the polling state."""
-    return False
+    @property
+    def swing_modes(self) -> Optional[List[str]]:
+        return self._swing_modes
 
-  @property
-  def name(self):
-    """Return the name of the climate device."""
-    return self._name
+    def set_hvac_mode(self, hvac_mode: str) -> None:
+        self._mode = hvac_mode
+        self.send_command()
 
-  @property
-  def temperature_unit(self):
-    """Return the unit of measurement."""
-    return self._unit
+    async def async_set_hvac_mode(self, hvac_mode):
+        await self.hass.async_add_executor_job(self.set_hvac_mode, hvac_mode)
 
-  @property
-  def current_temperature(self):
-    """Return the current temperature."""
-    return self._current_temperature
+    def set_fan_mode(self, fan_mode: str) -> None:
+        self._mode = fan_mode
+        self.send_command()
 
-  @property
-  def target_temperature(self):
-    """Return the temperature we try to reach."""
-    return self._target_temperature
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        await self.hass.async_add_executor_job(self.set_fan_mode, fan_mode)
 
-  @property
-  def target_temperature_step(self):
-    """Return the supported step of target temperature."""
-    return 1
+    def set_swing_mode(self, swing_mode: str) -> None:
+        self._swing_mode = swing_mode
+        self.send_command()
 
-  @property
-  def current_operation(self):
-    """Return current operation ie. heat, cool, idle."""
-    return self._current_operation
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        await self.hass.async_add_executor_job(self.set_swing_mode, swing_mode)
 
-  @property
-  def operation_list(self):
-    """Return the list of available operation modes."""
-    return self._operations_list
+    def set_temperature(self, **kwargs) -> None:
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        if temperature is None:
+            return
+        self._target_temperature = int(temperature)
+        self.send_command()
 
-  @property
-  def current_fan_mode(self):
-    """Return the fan setting."""
-    return self._current_fan_mode
-
-  @property
-  def fan_list(self):
-    """Return the list of available fan modes."""
-    return self._fan_list
-
-  def set_temperature(self, **kwargs):
-    """Set new target temperatures."""
-    if kwargs.get(ATTR_TEMPERATURE) is not None:
-      self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
-    if not (self._current_operation.lower() == 'off' or self._current_operation.lower() == 'idle'):
-      self.send_command()
-    self.schedule_update_ha_state()
-
-  def set_swing_mode(self, swing_mode):
-    """Set new target temperature."""
-    self._current_swing_mode = swing_mode
-    if not (self._current_operation.lower() == 'off' or self._current_operation.lower() == 'idle'):
-      self.send_command()
-    self.schedule_update_ha_state()
-
-  def set_fan_mode(self, fan):
-    """Set new target temperature."""
-    self._current_fan_mode = fan
-    if not (self._current_operation.lower() == 'off' or self._current_operation.lower() == 'idle'):
-      self.send_command()
-    self.schedule_update_ha_state()
-
-  def set_operation_mode(self, operation_mode):
-    """Set new target temperature."""
-    self._current_operation = operation_mode
-    self.send_command()
-    self.schedule_update_ha_state()
-
-  @property
-  def current_swing_mode(self):
-    """Return the swing setting."""
-    return self._current_swing_mode
-
-  @property
-  def swing_list(self):
-    """List of available swing modes."""
-    return self._swing_list
-
-  @asyncio.coroutine
-  def async_added_to_hass(self):
-    _LOGGER.warning("HVAC-IR/Remo climate added to hass")
-    state = yield from RestoreEntity.async_get_last_state(self)
-
-    if state is not None:
-      try:
-        self._target_temperature = state.attributes['temperature']
-        self._current_operation = state.attributes['operation_mode']
-        self._current_fan_mode = state.attributes['fan_mode']
-        self._current_swing_mode = state.attributes['swing_mode']
-      except KeyError:
-        pass
+    async def async_set_temperature(self, **kwargs) -> None:
+        await self.hass.async_add_executor_job(
+            ft.partial(self.set_temperature, **kwargs)
+        )
